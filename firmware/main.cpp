@@ -178,7 +178,7 @@ void HandleMidi(MidiEvent e) {
 }
 
 int main() {
-  hw.Init();
+  hw.Init(true);
   hw.led1.Set(0, 0, 0); hw.led2.Set(0, 0, 0); hw.UpdateLeds(); hw.seed.SetLed(false);
   hw.SetAudioBlockSize(48); hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
   InitResources();
@@ -224,6 +224,7 @@ int main() {
       int n = snprintf(message, sizeof(message), "RSTATE %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %u %d %u %u\n",
                        engine, polyIndex, genMode, scaleIndex, external, genRun ? 1 : 0, lastNote, int(outLevel * 1000),
                        values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], strumCount, knobPair, cpuPeak, overruns);
+      cpuPeak = 0;
       // values[8], values[9] follow on a second line to keep each line short
       n += snprintf(message + n, sizeof(message) - n, "RSTATE2 %d %d\n", values[8], values[9]);
       if (screenReady) screenUart.BlockingTransmit((uint8_t*)message, n, 30);

@@ -97,7 +97,7 @@ int noteColumn(int note) {
 void drawHeader() {
   tft.fillRect(0, 0, 320, 23, bg);
   label("DAISY RINGS", 14, 5, 1, accents[page % 5]);
-  if (linked) { char t[40]; snprintf(t, sizeof(t), "KNOBS: %s", knobPairNames[knobPair]); label(t, 150, 5, 1, mint); }
+  if (linked) { char t[48]; snprintf(t, sizeof(t), "%s  CPU %d%% X%u", knobPairNames[knobPair], cpu, overruns); label(t, 110, 5, 1, cpu > 85 ? accents[1] : mint); }
   else label("WAITING FOR POD", 200, 5, 1, dim);
 }
 void drawRun() {
@@ -199,7 +199,7 @@ void applyState(int e, int pi, int g, int sc, int ex, int run, int note, int lvl
   for (int i = 0; i < 8; i++) if (values[i] != v[i]) { values[i] = v[i]; for (int k = 0; k < n; k++) if (s[k].v == i) drawSlider(s[k]); if (i == V_ROOT && page == 0) full = true; }
   if (full) drawPad();
   if (strums != strumCount) { strumCount = strums; lastNote = note; int c = page == 0 ? noteColumn(note) : -1; if (c >= 0) { flash[c] = 255; drawKey(c); } }
-  lastNote = note; level = lvl; cpu = cpuPeak; overruns = over;
+  lastNote = note; level = lvl; static uint32_t lastHdr = 0; bool hdr = (cpuPeak / 5 != cpu / 5) || over != overruns; cpu = cpuPeak; overruns = over; if (hdr && millis() - lastHdr > 500) { lastHdr = millis(); drawHeader(); }
   if (page == 4) { static int lastPreset = -2; int a = matchingPreset(); if (a != lastPreset) { lastPreset = a; drawPresets(); } }
 }
 void parseLine(char* line) {
@@ -235,7 +235,7 @@ void handleTouch(int x, int y, bool fresh) {
     if (y >= padY && y < padY + padH && x >= 10 && x < 310) {
       int c = constrain((x - 10) / padColumnW(), 0, padColumns() - 1);
       if (c != heldColumn) { heldColumn = c; send("NOTE %d\n", padNote(rootNote(values[V_ROOT]), scaleIndex, c)); flash[c] = 255; drawKey(c); }
-      if (millis() - lastBright > 60) { lastBright = millis(); sendSet(V_BRIGHT, constrain(1000 - (y - padY) * 1000 / padH, 0, 1000)); }
+      if (millis() - lastBright > 60) { lastBright = millis(); sendSet(V_BRIGHT, 350 + constrain(padH - (y - padY), 0, padH) * 650 / padH); }
     }
     return;
   }

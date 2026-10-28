@@ -58,7 +58,7 @@ class Composer {
 
  private:
   struct Motif { uint8_t hit[8]; int8_t off[8]; };
-  Motif a_{}, b_{}; int phrase_ = -1, shift_ = 1, plan_[4] = {0, 0, 0, 0};
+  Motif a_{}, b_{}; int phrase_ = -1, shift_ = 1, planIdx_ = 0, plan_[4] = {0, 0, 0, 0};
 
   static int ChordDeg(int f, int len) { return (f * len + 3) / 7 % len; }  // 7-note degree -> this scale
   // nearest degree to g (within +-3) that is a tone of the triad on chord root c
@@ -71,39 +71,40 @@ class Composer {
       }
     return g;
   }
-  void GenMotif(Motif& m, const uint8_t* rhythm) {
-    int cur = 0, lastStep = 0; bool leapt = false;
+  // A hook: simple contour shape over a regular rhythm. Off-beat hits are thinned once, here,
+  // so the motif stays identical every time it repeats.
+  void GenMotif(Motif& m, const uint8_t* rhythm, int keepWeak) {
+    static const int8_t shapes[5][8] = {{0, 1, 2, 1, 0, 1, 0, -1}, {0, 1, 2, 3, 2, 1, 0, 0}, {2, 1, 0, 1, 2, 1, 0, 0}, {0, 0, 1, 2, 1, 0, -1, 0}, {0, 2, 1, 2, 3, 2, 1, 0}};
+    const int8_t* sh = shapes[Rand() % 5]; int k = 0;
     for (int i = 0; i < 8; i++) {
-      m.hit[i] = rhythm[i]; m.off[i] = cur;
-      if (!rhythm[i]) continue;
-      int step;
-      if (leapt) { step = lastStep > 0 ? -1 : 1; leapt = false; }          // a leap is followed by a step back
-      else if (Rand01() < .14f) { step = (Rand() & 1 ? 3 : -3); leapt = true; }
-      else { static const int st[8] = {-2, -1, -1, 0, 1, 1, 2, 1}; step = st[Rand() % 8]; }
-      lastStep = step; cur += step; if (cur > 4) cur = 4; if (cur < -4) cur = -4;
-      m.off[i] = cur;
+      m.hit[i] = rhythm[i]; m.off[i] = 0;
+      if (i == 0) m.hit[i] = 1; else if (i % 2 == 1 && (int)(Rand() % 1000) >= keepWeak) m.hit[i] = 0;
+      if (!m.hit[i]) continue;
+      int o = sh[k % 8] - (k == 0 ? sh[0] : 0); if (k > 0 && Rand01() < .15f) o += (Rand() & 1) ? 1 : -1;
+      if (o > 3) o = 3; if (o < -3) o = -3;
+      m.off[i] = o; k++;
     }
   }
-  void NewPhrase(int len) {
-    static const uint8_t cells[10][8] = {
-      {1,0,0,1,0,1,0,0}, {1,0,1,0,1,0,1,0}, {1,1,0,1,0,1,1,0}, {1,0,1,1,0,1,0,0}, {1,0,0,1,0,1,1,0},
-      {1,1,0,0,1,1,0,0}, {1,0,1,0,0,1,1,0}, {1,0,0,1,1,0,1,0}, {1,1,0,1,1,0,0,0}, {1,0,0,0,1,0,1,1}};
+  void NewPhrase(int len, int chance) {
+    static const uint8_t cells[8][8] = {
+      {1,0,1,0,1,0,1,0}, {1,0,0,1,0,0,1,0}, {1,0,1,1,0,1,0,0}, {1,1,0,1,1,0,1,0},
+      {1,0,1,0,1,1,0,0}, {1,0,0,1,0,1,0,0}, {1,1,1,0,1,0,1,0}, {1,0,1,0,0,1,1,0}};
+    static const int plans[5][2] = {{5, 3}, {3, 4}, {4, 5}, {3, 1}, {5, 4}};
     phrase_++;
-    if (phrase_ == 0 || Rand01() < .35f) {
-      const uint8_t* cell = cells[Rand() % 10]; GenMotif(a_, cell);
-      uint8_t r2[8]; for (int i = 0; i < 8; i++) r2[i] = cell[i];
-      r2[1 + Rand() % 7] ^= 1; r2[0] = 1;                                   // contrast: same feel, one hit changed
-      GenMotif(b_, r2);
+    bool fresh = phrase_ == 0 || ((phrase_ & 1) == 0 && Rand01() < .4f);      // a new tune only every other phrase
+    if (fresh) {
+      const uint8_t* cell = cells[Rand() % 8]; GenMotif(a_, cell, chance);
+      GenMotif(b_, cells[Rand() % 8], chance);
+      planIdx_ = Rand() % 5;
     }
-    shift_ = (Rand() & 1 ? 1 : -1) * (1 + (int)(Rand() % 2));
-    int x = Rand() & 1 ? 3 : 5, y = Rand() & 1 ? 4 : 1;
-    plan_[0] = 0; plan_[1] = ChordDeg(x, len); plan_[2] = ChordDeg(y, len);
-    plan_[3] = (phrase_ & 1) ? ChordDeg(4, len) : 0;                        // odd phrases ask (half cadence), even answer
+    shift_ = ((phrase_ / 2) & 1) ? -1 : 1;
+    plan_[0] = 0; plan_[1] = ChordDeg(plans[planIdx_][0], len); plan_[2] = ChordDeg(plans[planIdx_][1], len);
+    plan_[3] = (phrase_ & 1) ? ChordDeg(4, len) : 0;                          // odd phrases ask (half cadence), even answer
   }
   int TickMelody(const Params& p, int* out) {
     const int len = kScaleLen[p.scale], t = tick_, slot = t % 8, bar = t / 8, barIn = bar % 4;
     int count = 0;
-    if (t % 32 == 0) NewPhrase(len);
+    if (t % 32 == 0) NewPhrase(len, p.chance);
     if (slot == 0) {
       if (bar > 0 && p.sections && bar % (p.secBars < 1 ? 1 : p.secBars) == 0) section_ = (section_ + 1) % 4;
       chord_ = plan_[barIn];
@@ -114,14 +115,13 @@ class Composer {
     if (p.sections) { if (section_ == 0 || section_ == 3) oct = oct > 2 ? 2 : oct; else if (section_ == 2) oct = oct + 1 > 4 ? 4 : oct + 1; }
     if (oct < 2 && len <= 7) oct = 2;
     int span = len * oct;
-    const Motif& m = barIn == 2 ? b_ : a_;
+    const Motif& m = (barIn == 2 && (phrase_ & 1)) ? b_ : a_;               // bar 3 repeats the hook, or answers with the contrast
     if (!m.hit[slot]) return count;
     int lastSlot = 0; for (int i = 0; i <= 4; i++) if (m.hit[i]) lastSlot = i;
     bool cadence = barIn == 3, finalNote = cadence && slot == lastSlot;
     if (cadence && slot > lastSlot) return count;
     bool strong = slot == 0 || slot == 4;
-    if (!strong && !finalNote && Rand01() >= p.chance / 1000.f * (p.sections ? kDensity[section_] : 1.f)) return count;
-    int g = span / 2 + m.off[slot] + (barIn == 1 ? shift_ : 0) + (cadence ? shift_ / 2 : 0);
+    int g = span / 2 + m.off[slot] + (barIn == 1 ? shift_ : 0);
     if (g < 0) g = 0; if (g >= span) g = span - 1;
     if (finalNote) {                                                         // land on the chord root nearest the middle
       int best = g, bd = 99;

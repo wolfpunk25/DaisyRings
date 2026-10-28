@@ -3,6 +3,8 @@
 #include "daisy_pod.h"
 #include "dsp/part.h"
 #include "dsp/string_synth_part.h"
+#include "hid/midi_parser.h"
+#include "stm32h7xx_ll_usart.h"
 #include "command_line.h"
 #include "Shared.h"
 #include <cmath>
@@ -161,6 +163,27 @@ void Command(char* line) {
   }
 }
 
+// libDaisy shares one DMA stream between all UART receivers, and the touchscreen
+// link needs it, so DIN MIDI (USART1) is read by polling from a fast timer.
+MidiParser midiParser;
+volatile uint8_t midiRing[128]; volatile unsigned midiW = 0, midiR = 0;
+TimerHandle midiTimer;
+void MidiPoll(void*) {
+  while (LL_USART_IsActiveFlag_RXNE(USART1)) {
+    uint8_t b = LL_USART_ReceiveData8(USART1); unsigned nx = (midiW + 1) % sizeof(midiRing);
+    if (nx != midiR) { midiRing[midiW] = b; midiW = nx; }
+  }
+  if (LL_USART_IsActiveFlag_ORE(USART1)) LL_USART_ClearFlag_ORE(USART1);
+  if (LL_USART_IsActiveFlag_FE(USART1)) LL_USART_ClearFlag_FE(USART1);
+  if (LL_USART_IsActiveFlag_NE(USART1)) LL_USART_ClearFlag_NE(USART1);
+}
+void InitMidiPoll() {
+  midiParser.Init();
+  TimerHandle::Config c; c.periph = TimerHandle::Config::Peripheral::TIM_5; c.dir = TimerHandle::Config::CounterDir::UP;
+  c.period = 0xffff; c.enable_irq = true;
+  midiTimer.Init(c); midiTimer.SetPeriod(midiTimer.GetFreq() / 8000);
+  midiTimer.SetCallback(MidiPoll); midiTimer.Start();
+}
 void HandleMidi(MidiEvent e) {
   switch (e.type) {
     case NoteOn: { NoteOnEvent n = e.AsNoteOn(); if (n.velocity) userQueue.Push(n.note); break; }
@@ -186,7 +209,7 @@ int main() {
   part.Init(reverbBuffer); stringSynth.Init(reverbBuffer);
   hw.seed.usb_handle.Init(UsbHandle::FS_INTERNAL);
   InitScreen();
-  hw.midi.StartReceive();
+  InitMidiPoll();
   hw.StartAdc(); hw.StartAudio(Audio);
 
   CommandLine screenLine;
@@ -197,8 +220,10 @@ int main() {
   bool resetPickup = true;
   static char message[200];
   for (;;) {
-    hw.midi.Listen();
-    while (hw.midi.HasEvents()) HandleMidi(hw.midi.PopEvent());
+    while (midiR != midiW) {
+      uint8_t b = midiRing[midiR]; midiR = (midiR + 1) % sizeof(midiRing);
+      MidiEvent e; if (midiParser.Parse(b, &e)) HandleMidi(e);
+    }
     while (screenRead != screenWrite) {
       __DMB(); char c = screenRing[screenRead]; screenRead = (screenRead + 1) % sizeof(screenRing);
       screenLine.Feed(c, [](char* line) { if (strcmp(line, "PING")) Command(line); });

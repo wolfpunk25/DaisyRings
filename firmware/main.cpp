@@ -7,6 +7,7 @@
 #include "stm32h7xx_ll_usart.h"
 #include "command_line.h"
 #include "Shared.h"
+#include "composer.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -19,8 +20,8 @@ uint16_t reverbBuffer[32768];
 Part part;
 StringSynthPart stringSynth;
 
-volatile int values[NVAL] = {520, 780, 820, 400, 400, 280, 700, 400, 250, 600};
-volatile int engine = 0, polyIndex = 2, genMode = 0, scaleIndex = 0, external = 0;
+volatile int values[NVAL] = {520, 780, 820, 400, 400, 280, 950, 400, 250, 600};
+volatile int engine = 0, polyIndex = 2, genMode = 5, scaleIndex = 2, external = 0;
 volatile bool genRun = false;
 volatile int lastNote = 48;
 volatile unsigned strumCount = 0, cpuPeak = 0, overruns = 0;
@@ -64,21 +65,11 @@ void InitScreen() {
   if (screenReady) screenReady = screenUart.DmaListenStart(screenDma, sizeof(screenDma), ScreenReceive, nullptr) == UartHandler::Result::OK;
 }
 
-// ---- generative note choice -------------------------------------------------
-int NextGenNote() {
-  static int degree = 0, dir = 1;
-  int len = kScaleLen[scaleIndex], span = len * rangeOctaves(values[V_RANGE]);
-  switch (genMode) {
-    case 0: { static const int steps[8] = {-2, -1, -1, 0, 1, 1, 2, 1}; degree += steps[Rand() % 8];
-      if (degree < 0) degree = -degree; if (degree >= span) degree = 2 * (span - 1) - degree; break; }
-    case 1: degree = Rand() % span; break;
-    case 2: degree = (degree + 1) % span; break;
-    case 3: degree += dir; if (degree >= span - 1) { degree = span - 1; dir = -1; } if (degree <= 0) { degree = 0; dir = 1; } break;
-    default: degree = (Rand() % 10 < 6) ? 0 : int(Rand() % span); break;
-  }
-  if (degree < 0) degree = 0; if (degree >= span) degree = span - 1;
-  return rootNote(values[V_ROOT]) + 12 * (degree / len) + kScaleSteps[scaleIndex][degree % len];
-}
+// ---- generative composer ----------------------------------------------------
+Composer composer;
+volatile int comp[NCOMP] = {0, 0, 16, 5, 0, 100, 4, 2, 1234};
+volatile bool reseedFlag = true;
+volatile int secNow = 0, chordNow = 0;
 
 void Audio(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
   uint32_t begin = System::GetTick();
@@ -93,12 +84,20 @@ void Audio(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t si
   if (polyIndex != appliedPoly) { part.set_polyphony(1 << polyIndex); stringSynth.set_polyphony(1 << polyIndex); appliedPoly = polyIndex; }
 
   // generator clock
+  static int appliedSeed = -1;
+  if (reseedFlag || comp[C_SEED] != appliedSeed) { composer.Reseed(comp[C_SEED]); appliedSeed = comp[C_SEED]; reseedFlag = false; until = 0; }
   if (genRun) {
     until -= size;
     if (until <= 0) {
-      float hz = 0.1f * powf(100.f, values[V_RATE] / 1000.f);
-      until += 48000.f / hz;
-      if (Rand01() < values[V_CHANCE] / 1000.f) userQueue.Push(NextGenNote());
+      float bpm = comp[C_TEMPO];
+      if (genMode == 5) until += 48000.f * 60.f / (bpm * 2.f);            // melody grid: eighth notes
+      else if (comp[C_RHYTHM]) until += 48000.f * 60.f / (bpm * 4.f);     // euclid grid: sixteenths
+      else until += 48000.f / (0.1f * powf(100.f, values[V_RATE] / 1000.f));
+      Composer::Params cp{scaleIndex, genMode, rootNote(values[V_ROOT]), rangeOctaves(values[V_RANGE]), values[V_CHANCE],
+                          comp[C_RHYTHM], comp[C_SECT], comp[C_STEPS], comp[C_PULSES], comp[C_ROT], comp[C_SECBARS], comp[C_CHORDBARS]};
+      int notes[2]; int n = composer.Tick(cp, notes);
+      for (int i = 0; i < n; i++) userQueue.Push(notes[i]);
+      secNow = composer.section(); chordNow = composer.chord();
     }
   }
   bool strum = false;
@@ -111,7 +110,8 @@ void Audio(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t si
   auto clamp = [](float x, float hi) { return fmaxf(0.f, fminf(hi, x)); };
   Patch patch;
   patch.structure = clamp(values[V_STRUCT] / 1000.f + drift * sinf(phase * 6.2832f / 31.f), .9995f);
-  patch.brightness = clamp(values[V_BRIGHT] / 1000.f + drift * sinf(phase * 6.2832f / 47.f + 1.3f), 1.f);
+  static float secOff = 0; secOff += .001f * (composer.brightOffset(comp[C_SECT]) - secOff);
+  patch.brightness = clamp(values[V_BRIGHT] / 1000.f + secOff + drift * sinf(phase * 6.2832f / 47.f + 1.3f), 1.f);
   patch.damping = clamp(values[V_DAMP] / 1000.f + drift * .6f * sinf(phase * 6.2832f / 59.f + 2.1f), 1.f);
   patch.position = clamp(values[V_POS] / 1000.f + drift * sinf(phase * 6.2832f / 23.f + .4f), 1.f);
   if (phase > 4000.f) phase -= 4000.f * 1.f;
@@ -142,6 +142,8 @@ void LoadPreset(int i) {
   const Preset& p = presets[i];
   for (int k = 0; k < NVAL; k++) values[k] = p.values[k];
   engine = p.engine; polyIndex = p.poly; genMode = p.gen; scaleIndex = p.scale; external = p.external; genRun = true;
+  for (int k = 0; k < NCOMP; k++) comp[k] = p.comp[k];
+  reseedFlag = true;
 }
 
 void Command(char* line) {
@@ -153,7 +155,9 @@ void Command(char* line) {
   else if (sscanf(line, "GEN %d", &a) == 1 && a >= 0 && a < kGenModes) genMode = a;
   else if (sscanf(line, "SCALE %d", &a) == 1 && a >= 0 && a < kScales) scaleIndex = a;
   else if (sscanf(line, "EXT %d", &a) == 1) external = a ? 1 : 0;
-  else if (sscanf(line, "RUN %d", &a) == 1) genRun = a != 0;
+  else if (sscanf(line, "RUN %d", &a) == 1) { if (a && !genRun) reseedFlag = true; genRun = a != 0; }
+  else if (sscanf(line, "C %d %d", &a, &b) == 2 && a >= 0 && a < NCOMP && b >= kCompMin[a] && b <= kCompMax[a]) comp[a] = b;
+  else if (!strcmp(line, "NEWSEED")) comp[C_SEED] = Rand() % 10000;
   else if (sscanf(line, "NOTE %d", &a) == 1 && a >= 12 && a <= 108) { userQueue.Push(a); noteCount++; }
   else if (sscanf(line, "PRESET %d", &a) == 1) LoadPreset(a);
   else if (!strcmp(line, "RANDOM")) {
@@ -218,7 +222,7 @@ int main() {
   static const int pairs[4][2] = {{V_STRUCT, V_BRIGHT}, {V_DAMP, V_POS}, {V_RATE, V_CHANCE}, {V_DRIFT, V_VOL}};
   float previous[2] = {0, 0}, reference[2] = {0, 0}; bool caught[2] = {false, false}; int seen[2] = {-1, -1};
   bool resetPickup = true;
-  static char message[200];
+  static char message[360];
   for (;;) {
     while (midiR != midiW) {
       uint8_t b = midiRing[midiR]; midiR = (midiR + 1) % sizeof(midiRing);
@@ -242,7 +246,7 @@ int main() {
       resetPickup = false;
       int inc = hw.encoder.Increment(); if (inc) engine = (engine + inc + kEngines) % kEngines;
       if (hw.encoder.RisingEdge()) genMode = (genMode + 1) % kGenModes;
-      if (hw.button1.RisingEdge()) genRun = !genRun;
+      if (hw.button1.RisingEdge()) { if (!genRun) reseedFlag = true; genRun = !genRun; }
       if (hw.button2.RisingEdge()) { knobPair = (knobPair + 1) % 4; resetPickup = true; }
     }
     if (now - lastReport >= 100) {
@@ -253,7 +257,8 @@ int main() {
       cpuPeak = 0;
       // values[8], values[9] follow on a second line to keep each line short
       n += snprintf(message + n, sizeof(message) - n, "RSTATE2 %d %d %u %u\n", values[8], values[9], cmdCount, noteCount);
-      if (screenReady) screenUart.BlockingTransmit((uint8_t*)message, n, 30);
+      n += snprintf(message + n, sizeof(message) - n, "RSTATE3 %d %d %d %d %d %d %d %d %d %d %d\n", comp[0], comp[1], comp[2], comp[3], comp[4], comp[5], comp[6], comp[7], comp[8], secNow, chordNow);
+      if (screenReady) screenUart.BlockingTransmit((uint8_t*)message, n, 60);
     }
     System::Delay(1);
   }

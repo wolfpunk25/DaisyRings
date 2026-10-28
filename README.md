@@ -12,9 +12,13 @@ and the six string-synth ("Easter egg") effects. 1, 2 or 4 voices. Internal exci
 - **PLAY** – engine selector and a strum pad laid out in the current scale (two octaves). Slide a finger across keys to strum;
   vertical position sets Brightness while you play. Keys flash when the generator or MIDI plays.
 - **SOUND** – Structure, Brightness, Damping, Position.
-- **GEN** – generative sequencer: pattern (Walk, Random, Arp up, Arp up/down, Pedal), scale (8), Rate, Chance, Range (1–4 octaves), Drift (slow modulation of the sound).
+- **GEN** – pattern (**Composer**, Walk, Random, Arp up, Arp up/down, Pedal), scale (8), Rate, Density, Range (1–4 octaves), Drift (slow modulation of the sound).
+- **COMP** – composer settings: tempo, Euclidean rhythm (steps/pulses/rotate) for the non-Composer patterns, and sections (Pulse → Emerge → Peak → Dissolve) that change density, range and brightness over time.
+- **PLAY → NEW IDEA** picks a new random seed; BACK steps through earlier seeds. The same seed always plays the same piece.
+
+**Composer** (the melodic ideas generator): short motifs that repeat as a sequence and contrast in bar 3, over 4-bar phrases with I–IV/VI–V/II–I style chord plans in the chosen scale. Strong beats land on chord tones, leaps are answered by steps, odd phrases end on a half cadence and even phrases resolve to the tonic, with a bass note under each chord. Written from scratch (ideas from sequencers like Subsequence, no code copied).
 - **MIX** – root note, volume, voices, exciter source, RANDOMIZE.
-- **PRESET** – six starting patches. The bottom button starts/stops the generator on every page.
+- **MOODS** – six starting patches. The bottom button starts/stops the generator on every page.
 
 **Pod controls**: encoder = engine, encoder click = generator pattern, button 1 = run/stop generator,
 button 2 = cycle what the two knobs control (Struct/Bright, Damp/Pos, Rate/Chance, Drift/Vol; with pickup so values don't jump).

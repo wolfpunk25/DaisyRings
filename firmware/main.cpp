@@ -25,6 +25,7 @@ volatile unsigned strumCount = 0, cpuPeak = 0, overruns = 0;
 volatile float outLevel = 0;
 volatile float bend = 0;
 volatile bool muteAll = false;
+volatile unsigned cmdCount = 0, noteCount = 0;
 
 // Notes from touch/MIDI/generator are queued, then played one at a time.
 // A note has to be set one block before its strum so the voice latches it.
@@ -142,7 +143,7 @@ void LoadPreset(int i) {
 }
 
 void Command(char* line) {
-  int a, b;
+  int a, b; cmdCount++;
   if (!strcmp(line, "UPDATE")) { muteAll = true; System::Delay(350); System::ResetToBootloader(System::DAISY_INFINITE_TIMEOUT); return; }
   if (sscanf(line, "SET %d %d", &a, &b) == 2 && a >= 0 && a < NVAL && b >= 0 && b <= 1000) values[a] = b;
   else if (sscanf(line, "ENGINE %d", &a) == 1 && a >= 0 && a < kEngines) engine = a;
@@ -151,7 +152,7 @@ void Command(char* line) {
   else if (sscanf(line, "SCALE %d", &a) == 1 && a >= 0 && a < kScales) scaleIndex = a;
   else if (sscanf(line, "EXT %d", &a) == 1) external = a ? 1 : 0;
   else if (sscanf(line, "RUN %d", &a) == 1) genRun = a != 0;
-  else if (sscanf(line, "NOTE %d", &a) == 1 && a >= 12 && a <= 108) userQueue.Push(a);
+  else if (sscanf(line, "NOTE %d", &a) == 1 && a >= 12 && a <= 108) { userQueue.Push(a); noteCount++; }
   else if (sscanf(line, "PRESET %d", &a) == 1) LoadPreset(a);
   else if (!strcmp(line, "RANDOM")) {
     static const int pick[4] = {V_STRUCT, V_BRIGHT, V_DAMP, V_POS};
@@ -226,7 +227,7 @@ int main() {
                        values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], strumCount, knobPair, cpuPeak, overruns);
       cpuPeak = 0;
       // values[8], values[9] follow on a second line to keep each line short
-      n += snprintf(message + n, sizeof(message) - n, "RSTATE2 %d %d\n", values[8], values[9]);
+      n += snprintf(message + n, sizeof(message) - n, "RSTATE2 %d %d %u %u\n", values[8], values[9], cmdCount, noteCount);
       if (screenReady) screenUart.BlockingTransmit((uint8_t*)message, n, 30);
     }
     System::Delay(1);

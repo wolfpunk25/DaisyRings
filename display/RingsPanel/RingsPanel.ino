@@ -21,6 +21,7 @@ int engine = 0, polyIndex = 2, genMode = 0, scaleIndex = 0, external = 0, knobPa
 bool genRun = false, linked = false;
 int lastNote = 48, level = 0, cpu = 0; unsigned strumCount = 0, overruns = 0;
 int page = 0;
+unsigned sentCmds = 0, podCmds = 0, podNotes = 0; int touchX = 0, touchY = 0;
 uint32_t lastState = 0, lastTouch = 0;
 
 // ---- slider layout per page: value index, x, y, width ----
@@ -97,7 +98,7 @@ int noteColumn(int note) {
 void drawHeader() {
   tft.fillRect(0, 0, 320, 23, bg);
   label("DAISY RINGS", 14, 5, 1, accents[page % 5]);
-  if (linked) { char t[48]; snprintf(t, sizeof(t), "%s  CPU %d%% X%u", knobPairNames[knobPair], cpu, overruns); label(t, 110, 5, 1, cpu > 85 ? accents[1] : mint); }
+  if (linked) { char t[48]; snprintf(t, sizeof(t), "CPU%d%% X%u s%u c%u n%u t%d,%d", cpu, overruns, sentCmds, podCmds, podNotes, touchX, touchY); label(t, 100, 5, 1, cpu > 85 ? accents[1] : mint); }
   else label("WAITING FOR POD", 200, 5, 1, dim);
 }
 void drawRun() {
@@ -213,8 +214,9 @@ void parseLine(char* line) {
     lastState = millis();
     applyState(e, pi, g, sc, ex, run, note, lvl, v, strums, kp, cpuPeak, over);
   } else if (!strncmp(line, "RSTATE2 ", 8)) {
-    int a, b;
-    if (sscanf(line, "RSTATE2 %d %d", &a, &b) == 2 && a >= 0 && a <= 1000 && b >= 0 && b <= 1000) {
+    int a, b; unsigned pc = 0, pn = 0;
+    if (sscanf(line, "RSTATE2 %d %d %u %u", &a, &b, &pc, &pn) >= 2 && a >= 0 && a <= 1000 && b >= 0 && b <= 1000) {
+      podCmds = pc; podNotes = pn;
       int n; const Slider* s = pageSliders(page, n);
       int nv[2] = {a, b};
       for (int i = 0; i < 2; i++) if (values[8 + i] != nv[i]) { values[8 + i] = nv[i]; for (int k = 0; k < n; k++) if (s[k].v == 8 + i) drawSlider(s[k]); }
@@ -222,8 +224,8 @@ void parseLine(char* line) {
   }
 }
 
-void send(const char* fmt, int a) { podLink.printf(fmt, a); }
-void sendSet(int i, int v) { values[i] = v; podLink.printf("SET %d %d\n", i, v); }
+void send(const char* fmt, int a) { sentCmds++; podLink.printf(fmt, a); }
+void sendSet(int i, int v) { sentCmds++; values[i] = v; podLink.printf("SET %d %d\n", i, v); }
 
 void handleTouch(int x, int y, bool fresh) {
   if (fresh && y >= 25 && y < 54 && x >= 3 && x < 318) { int next = constrain((x - 3) / 63, 0, 4); if (next != page) { page = next; draw(); } return; }
@@ -271,7 +273,7 @@ void loop() {
     auto p = touch.getPoint();
     if (p.z > 200) {
       int x = lroundf(ax * p.x + bx * p.y + cx), y = lroundf(ay * p.x + by * p.y + cy);
-      handleTouch(x, y, !wasDown); wasDown = true; lastTouch = millis();
+      touchX = x; touchY = y; handleTouch(x, y, !wasDown); wasDown = true; lastTouch = millis();
     }
   }
   if (!down && wasDown) { wasDown = false; heldColumn = -1; }

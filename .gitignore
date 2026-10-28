@@ -1,0 +1,4 @@
+deps/
+toolchain/
+firmware/build/
+.DS_Store
